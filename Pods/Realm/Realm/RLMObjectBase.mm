@@ -20,7 +20,6 @@
 
 #import "RLMAccessor.h"
 #import "RLMArray_Private.hpp"
-#import "RLMDecimal128.h"
 #import "RLMListBase.h"
 #import "RLMObjectSchema_Private.hpp"
 #import "RLMObjectStore.h"
@@ -119,9 +118,6 @@ static id validatedObjectForProperty(__unsafe_unretained id const obj,
             return ret;
         }
         return coerceToObjectType(obj, objectClass, schema);
-    }
-    else if (prop.type == RLMPropertyTypeDecimal128 && !prop.array) {
-        return [[RLMDecimal128 alloc] initWithValue:obj];
     }
     return obj;
 }
@@ -238,7 +234,7 @@ id RLMCreateManagedAccessor(Class cls, RLMClassInfo *info) {
     }
 }
 
-+ (nullable NSArray<RLMProperty *> *)_getProperties {
++ (nullable NSArray<RLMProperty *> *)_getPropertiesWithInstance:(__unused id)obj {
     return nil;
 }
 
@@ -318,7 +314,7 @@ id RLMCreateManagedAccessor(Class cls, RLMClassInfo *info) {
     else if (_realm.isFrozen) {
         // The object key can never change for frozen objects, so that's usable
         // for objects without primary keys
-        return static_cast<NSUInteger>(_row.get_key().value);
+        return _row.get_key().value;
     }
     else {
         // Non-frozen objects without primary keys don't have any immutable
@@ -332,10 +328,6 @@ id RLMCreateManagedAccessor(Class cls, RLMClassInfo *info) {
     return RLMIsObjectSubclass(self);
 }
 
-+ (NSString *)primaryKey {
-    return nil;
-}
-
 + (NSString *)_realmObjectName {
     return nil;
 }
@@ -345,10 +337,6 @@ id RLMCreateManagedAccessor(Class cls, RLMClassInfo *info) {
 }
 
 + (bool)_realmIgnoreClass {
-    return false;
-}
-
-+ (bool)isEmbedded {
     return false;
 }
 
@@ -604,7 +592,6 @@ struct ObjectChangeCallbackWrapper {
             (__bridge void *)self, _name, _previousValue, _value];
 }
 @end
-
 @interface RLMObjectNotificationToken : RLMNotificationToken
 @end
 
@@ -721,9 +708,3 @@ uint64_t RLMObjectBaseGetCombineId(__unsafe_unretained RLMObjectBase *const obj)
     }
     return reinterpret_cast<uint64_t>((__bridge void *)obj);
 }
-
-@implementation RealmSwiftObject
-@end
-
-@implementation RealmSwiftEmbeddedObject
-@end

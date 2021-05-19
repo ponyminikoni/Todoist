@@ -1,4 +1,4 @@
-///////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////
 //
 // Copyright 2016 Realm Inc.
 //
@@ -27,7 +27,6 @@
 
 #include <mutex>
 #include <unordered_map>
-#include <map>
 
 namespace realm {
 
@@ -40,6 +39,7 @@ struct SyncClient;
 class WriteTransactionNotifyingSync;
 
 namespace sync_session_states {
+struct WaitingForAccessToken;
 struct Active;
 struct Dying;
 struct Inactive;
@@ -113,6 +113,7 @@ private:
 class SyncSession : public std::enable_shared_from_this<SyncSession> {
 public:
     enum class PublicState {
+        WaitingForAccessToken,
         Active,
         Dying,
         Inactive,
@@ -178,12 +179,25 @@ public:
     // If possible, take the session and do anything necessary to make it `Active`.
     // Specifically:
     // If the sync session is currently `Dying`, ask it to stay alive instead.
+    // If the sync session is currently `WaitingForAccessToken`, cancel any deferred close.
     // If the sync session is currently `Inactive`, recreate it.
     // Otherwise, a no-op.
     void revive_if_needed();
 
     // Perform any actions needed in response to regaining network connectivity.
+    // Specifically:
+    // If the sync session is currently `WaitingForAccessToken`, make the binding ask the auth server for a token.
+    // Otherwise, a no-op.
     void handle_reconnect();
+
+    // Give the `SyncSession` a new, valid token, and ask it to refresh the underlying session.
+    // If the session can't accept a new token, this method does nothing.
+    // Note that, if this is the first time the session will be given a token, `server_url` must
+    // be set.
+    void refresh_access_token(std::string access_token, util::Optional<std::string> server_url);
+
+    // FIXME: we need an API to allow the binding to tell sync that the access token fetch failed
+    // or was cancelled, and cannot be retried.
 
     // Set the multiplex identifier used for this session. Sessions with different identifiers are
     // never multiplexed into a single connection, even if they are connecting to the same host.
@@ -194,15 +208,18 @@ public:
     // not make the session reconnect.
     void set_multiplex_identifier(std::string multiplex_identity);
 
+    // See SyncConfig::url_prefix
+    //
+    // This method allows to override this value after the session is created but before it is bound
+    // because of Realm Cloud's token refresh service returning the sync worker ingress path with the token response.
+    // Prefer using the SyncConfig field in all other cases.
+    void set_url_prefix(std::string url_prefix);
+
     // Inform the sync session that it should close.
     void close();
 
     // Inform the sync session that it should log out.
     void log_out();
-
-    // Shut down the synchronization session (sync::Session) and wait for the Realm file to no
-    // longer be open on behalf of it.
-    void shutdown_and_wait();
 
     // Override the address and port of the server that this `SyncSession` is connected to. If the
     // session is already connected, it will disconnect and then reconnect to the specified address.
@@ -275,10 +292,9 @@ public:
 
 private:
     using std::enable_shared_from_this<SyncSession>::shared_from_this;
-    using CompletionCallbacks = std::map<int64_t,
-          std::pair<_impl::SyncProgressNotifier::NotifierType, std::function<void(std::error_code)>>>;
 
     struct State;
+    friend struct _impl::sync_session_states::WaitingForAccessToken;
     friend struct _impl::sync_session_states::Active;
     friend struct _impl::sync_session_states::Dying;
     friend struct _impl::sync_session_states::Inactive;
@@ -317,8 +333,6 @@ private:
     }
     // }
 
-    static std::function<void(util::Optional<app::AppError>)> handle_refresh(std::shared_ptr <SyncSession>);
-
     SyncSession(_impl::SyncClient&, std::string realm_path, SyncConfig, bool force_client_resync);
 
     void handle_error(SyncError);
@@ -339,9 +353,7 @@ private:
     void unregister(std::unique_lock<std::mutex>& lock);
     void did_drop_external_reference();
 
-    void add_completion_callback(const std::unique_lock<std::mutex>&,
-                                 std::function<void(std::error_code)> callback,
-                                 _impl::SyncProgressNotifier::NotifierType direction);
+    void add_completion_callback(_impl::SyncProgressNotifier::NotifierType direction);
 
     std::function<SyncSessionTransactCallback> m_sync_transact_callback;
 
@@ -361,8 +373,17 @@ private:
     std::string m_realm_path;
     _impl::SyncClient& m_client;
 
-    int64_t m_completion_request_counter = 0;
-    CompletionCallbacks m_completion_callbacks;
+    std::vector<std::function<void(std::error_code)>> m_download_completion_callbacks;
+    std::vector<std::function<void(std::error_code)>> m_upload_completion_callbacks;
+    // How many times a client resync has occurred. Used to discard session
+    // completion notifications from before the most recent client resync.
+    int m_client_resync_counter = 0;
+
+    struct ServerOverride {
+        std::string address;
+        int port;
+    };
+    util::Optional<ServerOverride> m_server_override;
 
     // The underlying `Session` object that is owned and managed by this `SyncSession`.
     // The session is first created when the `SyncSession` is moved out of its initial `inactive` state.
@@ -371,6 +392,13 @@ private:
     // logged-out user logs back in, the object store sync code will revive their sessions).
     std::unique_ptr<sync::Session> m_session;
 
+    // Whether or not the session object in `m_session` has been `bind()`ed before.
+    // This determines how the `SyncSession` behaves when refreshing tokens.
+    bool m_session_has_been_bound;
+
+    util::Optional<int_fast64_t> m_deferred_commit_notification;
+    bool m_deferred_close = false;
+
     // The fully-resolved URL of this Realm, including the server and the path.
     util::Optional<std::string> m_server_url;
 
@@ -378,6 +406,7 @@ private:
 
     _impl::SyncProgressNotifier m_progress_notifier;
     ConnectionChangeNotifier m_connection_change_notifier;
+
 
     class ExternalReference;
     std::weak_ptr<ExternalReference> m_external_reference;

@@ -5,6 +5,6 @@ target 'RealmApp' do
   # Comment the next line if you don't want to use dynamic frameworks
   use_frameworks!
 
-  pod 'RealmSwift'
+  pod 'RealmSwift','5.5.1'
 
 end

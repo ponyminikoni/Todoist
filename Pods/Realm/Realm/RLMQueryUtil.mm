@@ -19,8 +19,6 @@
 #import "RLMQueryUtil.hpp"
 
 #import "RLMArray.h"
-#import "RLMDecimal128_Private.hpp"
-#import "RLMObjectId_Private.hpp"
 #import "RLMObjectSchema_Private.h"
 #import "RLMObject_Private.hpp"
 #import "RLMPredicateUtil.hpp"
@@ -84,7 +82,6 @@ BOOL RLMPropertyTypeIsNumeric(RLMPropertyType propertyType) {
         case RLMPropertyTypeInt:
         case RLMPropertyTypeFloat:
         case RLMPropertyTypeDouble:
-        case RLMPropertyTypeDecimal128:
             return YES;
         default:
             return NO;
@@ -451,7 +448,7 @@ public:
                                 A&& lhs, B&& rhs);
 
     template <typename A, typename B>
-    void add_bool_constraint(RLMPropertyType, NSPredicateOperatorType operatorType, A&& lhs, B&& rhs);
+    void add_bool_constraint(NSPredicateOperatorType operatorType, A&& lhs, B&& rhs);
 
     void add_substring_constraint(null, Query condition);
     template<typename T>
@@ -543,9 +540,7 @@ void QueryBuilder::add_numeric_constraint(RLMPropertyType datatype,
 }
 
 template <typename A, typename B>
-void QueryBuilder::add_bool_constraint(RLMPropertyType datatype,
-                                       NSPredicateOperatorType operatorType,
-                                       A&& lhs, B&& rhs) {
+void QueryBuilder::add_bool_constraint(NSPredicateOperatorType operatorType, A&& lhs, B&& rhs) {
     switch (operatorType) {
         case NSEqualToPredicateOperatorType:
             m_query.and_query(lhs == rhs);
@@ -555,8 +550,7 @@ void QueryBuilder::add_bool_constraint(RLMPropertyType datatype,
             break;
         default:
             @throw RLMPredicateException(@"Invalid operator type",
-                                         @"Operator '%@' not supported for type %@",
-                                         operatorName(operatorType), RLMTypeToString(datatype));
+                                         @"Operator '%@' not supported for bool type", operatorName(operatorType));
     }
 }
 
@@ -781,6 +775,9 @@ void QueryBuilder::add_binary_constraint(NSPredicateOperatorType, const ColumnRe
 
 void QueryBuilder::add_link_constraint(NSPredicateOperatorType operatorType,
                                        const ColumnReference& column, RLMObjectBase *obj) {
+    RLMPrecondition(operatorType == NSEqualToPredicateOperatorType || operatorType == NSNotEqualToPredicateOperatorType,
+                    @"Invalid operator type", @"Only 'Equal' and 'Not Equal' operators supported for object comparison");
+
     if (!obj->_row.is_valid()) {
         // Unmanaged or deleted objects, so compare it to an object that doesn't
         // exist from the target table
@@ -789,17 +786,19 @@ void QueryBuilder::add_link_constraint(NSPredicateOperatorType operatorType,
                 m_table = TableRef::unsafe_create(&::get_table(column.group(), column.link_target_object_schema()));
             }
         } fake(column);
-        add_bool_constraint(RLMPropertyTypeObject, operatorType, column.resolve<Link>(), fake);
+        add_bool_constraint(operatorType, column.resolve<Link>(), fake);
     }
     else {
-        add_bool_constraint(RLMPropertyTypeObject, operatorType, column.resolve<Link>(), obj->_row);
+        add_bool_constraint(operatorType, column.resolve<Link>(), obj->_row);
     }
 }
 
 void QueryBuilder::add_link_constraint(NSPredicateOperatorType operatorType,
                                        const ColumnReference& column,
                                        realm::null) {
-    add_bool_constraint(RLMPropertyTypeObject, operatorType, column.resolve<Link>(), null());
+    RLMPrecondition(operatorType == NSEqualToPredicateOperatorType || operatorType == NSNotEqualToPredicateOperatorType,
+                    @"Invalid operator type", @"Only 'Equal' and 'Not Equal' operators supported for object comparison");
+    add_bool_constraint(operatorType, column.resolve<Link>(), null());
 }
 
 template<typename T>
@@ -878,22 +877,6 @@ String convert<String>(id value) {
     return RLMStringDataWithNSString(value);
 }
 
-template <>
-Decimal128 convert<Decimal128>(id value) {
-    return RLMObjcToDecimal128(value);
-}
-
-template <>
-ObjectId convert<ObjectId>(id value) {
-    if (auto objectId = RLMDynamicCast<RLMObjectId>(value)) {
-        return objectId.value;
-    }
-    if (auto string = RLMDynamicCast<NSString>(value)) {
-        return ObjectId(string.UTF8String);
-    }
-    @throw RLMException(@"Cannot convert value '%@' of type '%@' to object id", value, [value class]);
-}
-
 template <typename>
 realm::null value_of_type(realm::null) {
     return realm::null();
@@ -918,10 +901,7 @@ void QueryBuilder::do_add_constraint(RLMPropertyType type, NSPredicateOperatorTy
 
     switch (type) {
         case RLMPropertyTypeBool:
-            add_bool_constraint(type, operatorType, value_of_type<bool>(values)...);
-            break;
-        case RLMPropertyTypeObjectId:
-            add_bool_constraint(type, operatorType, value_of_type<realm::ObjectId>(values)...);
+            add_bool_constraint(operatorType, value_of_type<bool>(values)...);
             break;
         case RLMPropertyTypeDate:
             add_numeric_constraint(type, operatorType, value_of_type<realm::Timestamp>(values)...);
@@ -934,9 +914,6 @@ void QueryBuilder::do_add_constraint(RLMPropertyType type, NSPredicateOperatorTy
             break;
         case RLMPropertyTypeInt:
             add_numeric_constraint(type, operatorType, value_of_type<Int>(values)...);
-            break;
-        case RLMPropertyTypeDecimal128:
-            add_numeric_constraint(type, operatorType, value_of_type<realm::Decimal128>(values)...);
             break;
         case RLMPropertyTypeString:
             add_string_constraint(operatorType, predicateOptions, value_of_type<String>(values)...);
@@ -1116,9 +1093,6 @@ void QueryBuilder::add_collection_operation_constraint(RLMPropertyType propertyT
             break;
         case RLMPropertyTypeDouble:
             add_numeric_constraint(propertyType, operatorType, value_of_type_with_collection_operation<Double, Operation>(values)...);
-            break;
-        case RLMPropertyTypeDecimal128:
-            add_numeric_constraint(propertyType, operatorType, value_of_type_with_collection_operation<Decimal128, Operation>(values)...);
             break;
         default:
             REALM_ASSERT(false && "Only numeric property types should hit this path.");

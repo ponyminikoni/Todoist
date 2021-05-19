@@ -42,6 +42,7 @@ public:
     using Array::erase;
     using Array::clear;
     using Array::destroy;
+    using Array::verify;
 
     ArrayKeyBase(Allocator& allocator)
         : Array(allocator)
@@ -110,7 +111,6 @@ public:
         REALM_ASSERT(begin != realm::npos);
         Array::erase(begin);
     }
-    void verify() const;
 };
 
 class ArrayKey : public ArrayKeyBase<1> {

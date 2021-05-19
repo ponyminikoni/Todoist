@@ -41,8 +41,6 @@ import Realm
  * `String`
  * `Data`
  * `Date`
- * `Decimal128`
- * `ObjectId`
 
  ### Relationships: Array (in Swift, `List`) and `Object` types
 
@@ -57,6 +55,3 @@ public typealias PropertyType = RLMPropertyType
  - see: `Realm.observe(_:)`
  */
 public typealias NotificationToken = RLMNotificationToken
-
-/// :nodoc:
-public typealias ObjectBase = RLMObjectBase

@@ -136,7 +136,7 @@ public:
     template <Action action>
     bool uses_val()
     {
-        return (action == act_Max || action == act_Min || action == act_Sum);
+        return (action == act_Max || action == act_Min || action == act_Sum || action == act_Count);
     }
 
     QueryState(Action action, Array* = nullptr, size_t limit = -1)

@@ -31,7 +31,7 @@ public:
     using TraverseFunction = util::FunctionRef<bool(const Cluster*)>;
     using UpdateFunction = util::FunctionRef<void(Cluster*)>;
 
-    ClusterTree(Table* owner, Allocator& alloc, size_t top_position_for_cluster_tree);
+    ClusterTree(Table* owner, Allocator& alloc);
     static MemRef create_empty_cluster(Allocator& alloc);
 
     ClusterTree(ClusterTree&&) = default;
@@ -64,10 +64,6 @@ public:
         return m_size;
     }
     void clear(CascadeState&);
-    void destroy()
-    {
-        m_root->destroy_deep();
-    }
     void nullify_links(ObjKey, CascadeState&);
     bool is_empty() const noexcept
     {
@@ -80,6 +76,10 @@ public:
     MemRef ensure_writeable(ObjKey k)
     {
         return m_root->ensure_writeable(k);
+    }
+    void update_ref_in_parent(ObjKey k, ref_type ref)
+    {
+        m_root->update_ref_in_parent(k, ref);
     }
     Array& get_fields_accessor(Array& fallback, MemRef mem) const
     {
@@ -160,7 +160,6 @@ private:
     Table* m_owner;
     Allocator& m_alloc;
     std::unique_ptr<ClusterNode> m_root;
-    size_t m_top_position_for_cluster_tree;
     size_t m_size = 0;
 
     void replace_root(std::unique_ptr<ClusterNode> leaf);

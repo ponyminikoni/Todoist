@@ -1,3 +1,22 @@
+/*************************************************************************
+ *
+ * REALM CONFIDENTIAL
+ * __________________
+ *
+ *  [2011] - [2016] Realm Inc
+ *  All Rights Reserved.
+ *
+ * NOTICE:  All information contained herein is, and remains
+ * the property of Realm Incorporated and its suppliers,
+ * if any.  The intellectual and technical concepts contained
+ * herein are proprietary to Realm Incorporated
+ * and its suppliers and may be covered by U.S. and Foreign Patents,
+ * patents in process, and are protected by trade secret or copyright law.
+ * Dissemination of this information or reproduction of this material
+ * is strictly forbidden unless prior written permission is obtained
+ * from Realm Incorporated.
+ *
+ **************************************************************************/
 
 #ifndef REALM_UTIL_WEBSOCKET_HPP
 #define REALM_UTIL_WEBSOCKET_HPP
@@ -15,8 +34,10 @@ namespace realm {
 namespace util {
 namespace websocket {
 
-using WriteCompletionHandler = std::function<void(std::error_code, size_t num_bytes_transferred)>;
-using ReadCompletionHandler = std::function<void(std::error_code, size_t num_bytes_transferred)>;
+using WriteCompletionHandler =
+    std::function<void(std::error_code, size_t num_bytes_transferred)>;
+using ReadCompletionHandler =
+    std::function<void(std::error_code, size_t num_bytes_transferred)>;
 
 class Config {
 public:
@@ -74,7 +95,7 @@ public:
     //@{
     /// The five callback functions below are called whenever a full message has arrived.
     /// The Socket defragments fragmented messages internally and delivers a full message.
-    /// The message is delivered in the buffer \a data of size \a size .
+    /// The message is delivered in the buffer \p data of size \p size.
     /// The buffer is only valid until the function returns.
     /// The return value designates whether the WebSocket object should continue
     /// processing messages. The normal return value is true. False must be returned if the
@@ -88,7 +109,14 @@ public:
 };
 
 
-enum class Opcode { continuation = 0, text = 1, binary = 2, close = 8, ping = 9, pong = 10 };
+enum class Opcode {
+    continuation =  0,
+    text         =  1,
+    binary       =  2,
+    close        =  8,
+    ping         =  9,
+    pong         = 10
+};
 
 
 class Socket {
@@ -108,8 +136,10 @@ public:
     /// When the server responds with a valid HTTP response, the callback
     /// function websocket_handshake_completion_handler() is called. Messages
     /// can only be sent and received after the handshake has completed.
-    void initiate_client_handshake(const std::string& request_uri, const std::string& host,
-                                   const std::string& sec_websocket_protocol, HTTPHeaders headers = HTTPHeaders{});
+    void initiate_client_handshake(const std::string& request_uri,
+                                   const std::string& host,
+                                   const std::string& sec_websocket_protocol,
+                                   HTTPHeaders headers = HTTPHeaders{});
 
     /// initiate_server_handshake() starts the Socket in server mode. It will
     /// wait for a HTTP request from a client and respond with a HTTP response.
@@ -132,9 +162,9 @@ public:
     /// The handler is type std::function<void()> and is called when the frame has been successfully
     /// sent. In case of errors, the Config::websocket_write_error_handler() is called.
 
-    /// async_write_frame() sends a single frame with the fin bit set to 0 or 1 from \a fin, and the opcode
-    /// set by \a opcode. The frame payload is taken from \param data of size \a size. \param handler is
-    /// called when the frame has been successfully sent. Errors are reported through
+    /// async_write_frame() sends a single frame with the fin bit set to 0 or 1 from \p fin, and the opcode
+    /// set by \p opcode. The frame payload is taken from \p data of size \p size. \p handler is
+    /// called when the frame has been successfully sent. Error s are reported through
     /// websocket_write_error_handler() in Config.
     /// This function is rather low level and should only be used with knowledge of the WebSocket protocol.
     /// The five utility functions below are recommended for message sending.
@@ -185,7 +215,8 @@ util::Optional<std::string> read_sec_websocket_protocol(const HTTPRequest& reque
 /// make_http_response() takes \a request as a WebSocket handshake request,
 /// validates it, and makes a HTTP response. If the request is invalid, the
 /// return value is None, and ec is set to Error::bad_request_header_*.
-util::Optional<HTTPResponse> make_http_response(const HTTPRequest& request, const std::string& sec_websocket_protocol,
+util::Optional<HTTPResponse> make_http_response(const HTTPRequest& request,
+                                                const std::string& sec_websocket_protocol,
                                                 std::error_code& ec);
 
 enum class Error {
@@ -224,8 +255,7 @@ std::error_code make_error_code(Error) noexcept;
 
 namespace std {
 
-template <>
-struct is_error_code_enum<realm::util::websocket::Error> {
+template<> struct is_error_code_enum<realm::util::websocket::Error> {
     static const bool value = true;
 };
 

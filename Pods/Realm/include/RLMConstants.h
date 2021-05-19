@@ -20,6 +20,15 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// For compatibility with Xcode 7, before extensible string enums were introduced,
+#ifdef NS_EXTENSIBLE_STRING_ENUM
+#define RLM_EXTENSIBLE_STRING_ENUM NS_EXTENSIBLE_STRING_ENUM
+#define RLM_EXTENSIBLE_STRING_ENUM_CASE_SWIFT_NAME(_, extensible_string_enum) NS_SWIFT_NAME(extensible_string_enum)
+#else
+#define RLM_EXTENSIBLE_STRING_ENUM
+#define RLM_EXTENSIBLE_STRING_ENUM_CASE_SWIFT_NAME(fully_qualified, _) NS_SWIFT_NAME(fully_qualified)
+#endif
+
 // Swift 5 considers NS_ENUM to be "open", meaning there could be values present
 // other than the defined cases (which allows adding more cases later without
 // it being a breaking change), while older versions consider it "closed".
@@ -82,9 +91,6 @@ typedef RLM_CLOSED_ENUM(int32_t, RLMPropertyType) {
     RLMPropertyTypeObject = 7,
     /** Realm linking objects. See [Realm Models](https://realm.io/docs/objc/latest/#models) for more information. */
     RLMPropertyTypeLinkingObjects = 8,
-
-    RLMPropertyTypeObjectId = 10,
-    RLMPropertyTypeDecimal128 = 11,
 };
 
 /** An error domain identifying Realm-specific errors. */
@@ -152,9 +158,6 @@ typedef RLM_ERROR_ENUM(NSInteger, RLMError, RLMErrorDomain) {
      Denotates an error where an operation was requested which cannot be performed on an open file.
      */
     RLMErrorAlreadyOpen = 12,
-
-    /// Denotates an error where an input value was invalid.
-    RLMErrorInvalidInput = 13,
 };
 
 #pragma mark - Constants
@@ -164,7 +167,7 @@ typedef RLM_ERROR_ENUM(NSInteger, RLMError, RLMErrorDomain) {
 /**
  A notification indicating that changes were made to a Realm.
 */
-typedef NSString * RLMNotification NS_EXTENSIBLE_STRING_ENUM;
+typedef NSString * RLMNotification RLM_EXTENSIBLE_STRING_ENUM;
 
 /**
  This notification is posted when a write transaction has been committed to a Realm on a different thread for
@@ -177,7 +180,8 @@ typedef NSString * RLMNotification NS_EXTENSIBLE_STRING_ENUM;
  `-[RLMRealm refresh]` after doing some work. Refreshing the Realm is optional, but not refreshing the Realm may lead to
  large Realm files. This is because an extra copy of the data must be kept for the stale Realm.
  */
-extern RLMNotification const RLMRealmRefreshRequiredNotification NS_SWIFT_NAME(RefreshRequired);
+extern RLMNotification const RLMRealmRefreshRequiredNotification
+RLM_EXTENSIBLE_STRING_ENUM_CASE_SWIFT_NAME(RLMRealmRefreshRequiredNotification, RefreshRequired);
 
 /**
  This notification is posted by a Realm when a write transaction has been
@@ -192,7 +196,8 @@ extern RLMNotification const RLMRealmRefreshRequiredNotification NS_SWIFT_NAME(R
  files. This is because Realm must keep an extra copy of the data for the stale
  Realm.
  */
-extern RLMNotification const RLMRealmDidChangeNotification NS_SWIFT_NAME(DidChange);
+extern RLMNotification const RLMRealmDidChangeNotification
+RLM_EXTENSIBLE_STRING_ENUM_CASE_SWIFT_NAME(RLMRealmDidChangeNotification, DidChange);
 
 #pragma mark - Error keys
 

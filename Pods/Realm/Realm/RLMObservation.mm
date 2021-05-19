@@ -278,14 +278,13 @@ void RLMClearTable(RLMClassInfo &objectSchema) {
         info->willChange(RLMInvalidatedKey);
     }
 
-    {
-        RLMObservationTracker tracker(objectSchema.realm, true);
+    RLMTrackDeletions(objectSchema.realm, ^{
         Results(objectSchema.realm->_realm, objectSchema.table()).clear();
 
         for (auto info : objectSchema.observedObjects) {
             info->prepareForInvalidation();
         }
-    }
+    });
 
     for (auto info : reverse(objectSchema.observedObjects)) {
         info->didChange(RLMInvalidatedKey);
@@ -294,170 +293,146 @@ void RLMClearTable(RLMClassInfo &objectSchema) {
     objectSchema.observedObjects.clear();
 }
 
-RLMObservationTracker::RLMObservationTracker(__unsafe_unretained RLMRealm *const realm, bool trackDeletions)
-: _realm(realm)
-, _group(realm.group)
-{
-    if (trackDeletions) {
-        this->trackDeletions();
-    }
-}
+void RLMTrackDeletions(__unsafe_unretained RLMRealm *const realm, dispatch_block_t block) {
+    std::vector<std::vector<RLMObservationInfo *> *> observedTables;
 
-RLMObservationTracker::~RLMObservationTracker() {
-    didChange();
-}
-
-void RLMObservationTracker::willChange(RLMObservationInfo *info, NSString *key,
-                                       NSKeyValueChange kind, NSIndexSet *indexes) {
-    _key = key;
-    _kind = kind;
-    _indexes = indexes;
-    _info = info;
-    if (_info) {
-        _info->willChange(key, kind, indexes);
-    }
-}
-
-void RLMObservationTracker::trackDeletions() {
-    if (_group.has_cascade_notification_handler()) {
-        // We're nested inside another call which will handle any cascaded changes for us
-        return;
-    }
-
-    for (auto& info : _realm->_info) {
+    for (auto& info : realm->_info) {
         if (!info.second.observedObjects.empty()) {
-            _observedTables.push_back(&info.second.observedObjects);
+            observedTables.push_back(&info.second.observedObjects);
         }
     }
 
     // No need for change tracking if no objects are observed
-    if (_observedTables.empty()) {
+    if (observedTables.empty()) {
+        block();
         return;
     }
 
-    _group.set_cascade_notification_handler([=](realm::Group::CascadeNotification const& cs) {
-        cascadeNotification(cs);
-    });
-}
-
-template<typename CascadeNotification>
-void RLMObservationTracker::cascadeNotification(CascadeNotification const& cs) {
-    if (cs.rows.empty() && cs.links.empty()) {
-        return;
-    }
-
-    size_t invalidatedCount = _invalidated.size();
-    size_t changeCount = _changes.size();
-
-    auto tableKey = [](RLMObservationInfo *info) {
-        return info->getRow().get_table()->get_key();
+    struct change {
+        RLMObservationInfo *info;
+        __unsafe_unretained NSString *property;
+        NSMutableIndexSet *indexes;
     };
-    std::sort(begin(_observedTables), end(_observedTables),
-              [=](auto a, auto b) { return tableKey(a->front()) < tableKey(b->front()); });
-    for (auto const& link : cs.links) {
-        auto table = std::find_if(_observedTables.begin(), _observedTables.end(), [&](auto table) {
-            return tableKey(table->front()) == link.origin_table;
-        });
-        if (table == _observedTables.end()) {
-            continue;
+
+    std::vector<change> changes;
+    std::vector<RLMObservationInfo *> invalidated;
+    size_t changeCount = 0, invalidatedCount = 0;
+
+    // This callback is called by core with a list of row deletions and
+    // resulting link nullifications immediately before things are deleted and nullified
+    realm.group.set_cascade_notification_handler([&](realm::Group::CascadeNotification const& cs) {
+        if (cs.rows.empty() && cs.links.empty()) {
+            return;
         }
 
-        for (auto observer : **table) {
-            if (!observer->isForRow(link.origin_key)) {
+        auto tableKey = [](RLMObservationInfo *info) {
+            return info->getRow().get_table()->get_key();
+        };
+        std::sort(begin(observedTables), end(observedTables),
+                  [=](auto a, auto b) { return tableKey(a->front()) < tableKey(b->front()); });
+        for (auto const& link : cs.links) {
+            auto table = std::find_if(observedTables.begin(), observedTables.end(), [&](auto table) {
+                return tableKey(table->front()) == link.origin_table;
+            });
+            if (table == observedTables.end()) {
                 continue;
             }
 
-            NSString *name = observer->columnName(link.origin_col_key);
-            if (observer->getRow().get_table()->get_column_type(link.origin_col_key) != type_LinkList) {
-                _changes.push_back({observer, name});
-                continue;
-            }
+            for (auto observer : **table) {
+                if (!observer->isForRow(link.origin_key)) {
+                    continue;
+                }
 
-            auto c = find_if(begin(_changes), end(_changes), [&](auto const& c) {
-                return c.info == observer && c.property == name;
-            });
-            if (c == end(_changes)) {
-                _changes.push_back({observer, name, [NSMutableIndexSet new]});
-                c = prev(end(_changes));
-            }
+                NSString *name = observer->columnName(link.origin_col_key);
+                if (observer->getRow().get_table()->get_column_type(link.origin_col_key) != type_LinkList) {
+                    changes.push_back({observer, name});
+                    continue;
+                }
 
-            // We know what row index is being removed from the LinkView,
-            // but what we actually want is the indexes in the LinkView that
-            // are going away
-            auto linkview = observer->getRow().get_linklist(link.origin_col_key);
-            linkview.find_all(link.old_target_key, [&](size_t index) {
-                [c->indexes addIndex:index];
-            });
+                auto c = find_if(begin(changes), end(changes), [&](auto const& c) {
+                    return c.info == observer && c.property == name;
+                });
+                if (c == end(changes)) {
+                    changes.push_back({observer, name, [NSMutableIndexSet new]});
+                    c = prev(end(changes));
+                }
+
+                // We know what row index is being removed from the LinkView,
+                // but what we actually want is the indexes in the LinkView that
+                // are going away
+                auto linkview = observer->getRow().get_linklist(link.origin_col_key);
+                linkview.find_all(link.old_target_key, [&](size_t index) {
+                    [c->indexes addIndex:index];
+                });
+            }
         }
-    }
-    if (!cs.rows.empty()) {
-        using Row = realm::Group::CascadeNotification::row;
-        auto begin = cs.rows.begin();
-        for (auto table : _observedTables) {
-            auto currentTableKey = tableKey(table->front());
-            if (begin->table_key < currentTableKey) {
-                // Find the first deleted object in or after this table
-                begin = std::lower_bound(begin, cs.rows.end(), Row{currentTableKey, realm::ObjKey(0)});
-            }
-            if (begin == cs.rows.end()) {
-                // No more deleted objects
-                break;
-            }
-            if (currentTableKey < begin->table_key) {
-                // Next deleted object is in a table after this one
-                continue;
-            }
+        if (!cs.rows.empty()) {
+            using Row = realm::Group::CascadeNotification::row;
+            auto begin = cs.rows.begin();
+            for (auto table : observedTables) {
+                auto currentTableKey = tableKey(table->front());
+                if (begin->table_key < currentTableKey) {
+                    // Find the first deleted object in or after this table
+                    begin = std::lower_bound(begin, cs.rows.end(), Row{currentTableKey, realm::ObjKey(0)});
+                }
+                if (begin == cs.rows.end()) {
+                    // No more deleted objects
+                    break;
+                }
+                if (currentTableKey < begin->table_key) {
+                    // Next deleted object is in a table after this one
+                    continue;
+                }
 
-            // Find the end of the deletions in this table
-            auto end = std::lower_bound(begin, cs.rows.end(), Row{realm::TableKey(currentTableKey.value + 1), realm::ObjKey(0)});
+                // Find the end of the deletions in this table
+                auto end = std::lower_bound(begin, cs.rows.end(), Row{realm::TableKey(currentTableKey.value + 1), realm::ObjKey(0)});
 
-            // Check each observed object to see if it's in the deleted rows
-            for (auto info : *table) {
-                if (std::binary_search(begin, end, Row{currentTableKey, info->getRow().get_key()})) {
-                    _invalidated.push_back(info);
+                // Check each observed object to see if it's in the deleted rows
+                for (auto info : *table) {
+                    if (std::binary_search(begin, end, Row{currentTableKey, info->getRow().get_key()})) {
+                        invalidated.push_back(info);
+                    }
+                }
+
+                // Advance the begin iterator to the start of the next table
+                begin = end;
+                if (begin == cs.rows.end()) {
+                    break;
                 }
             }
-
-            // Advance the begin iterator to the start of the next table
-            begin = end;
-            if (begin == cs.rows.end()) {
-                break;
-            }
         }
+
+        // The relative order of these loops is very important
+        for (size_t i = invalidatedCount; i < invalidated.size(); ++i) {
+            invalidated[i]->willChange(RLMInvalidatedKey);
+        }
+        for (size_t i = changeCount; i < changes.size(); ++i) {
+            auto const& change = changes[i];
+            change.info->willChange(change.property, NSKeyValueChangeRemoval, change.indexes);
+        }
+        for (size_t i = invalidatedCount; i < invalidated.size(); ++i) {
+            invalidated[i]->prepareForInvalidation();
+        }
+        invalidatedCount = invalidated.size();
+        changeCount = changes.size();
+    });
+
+    try {
+        block();
+    }
+    catch (...) {
+        realm.group.set_cascade_notification_handler(nullptr);
+        throw;
     }
 
-    // The relative order of these loops is very important
-    for (size_t i = invalidatedCount; i < _invalidated.size(); ++i) {
-        _invalidated[i]->willChange(RLMInvalidatedKey);
-    }
-    for (size_t i = changeCount; i < _changes.size(); ++i) {
-        auto const& change = _changes[i];
-        change.info->willChange(change.property, NSKeyValueChangeRemoval, change.indexes);
-    }
-    for (size_t i = invalidatedCount; i < _invalidated.size(); ++i) {
-        _invalidated[i]->prepareForInvalidation();
-    }
-}
-
-void RLMObservationTracker::didChange() {
-    if (_info) {
-        _info->didChange(_key, _kind, _indexes);
-        _info = nullptr;
-    }
-    if (_observedTables.empty()) {
-        return;
-    }
-    _group.set_cascade_notification_handler(nullptr);
-
-    for (auto const& change : reverse(_changes)) {
+    for (auto const& change : reverse(changes)) {
         change.info->didChange(change.property, NSKeyValueChangeRemoval, change.indexes);
     }
-    for (auto info : reverse(_invalidated)) {
+    for (auto info : reverse(invalidated)) {
         info->didChange(RLMInvalidatedKey);
     }
-    _observedTables.clear();
-    _changes.clear();
-    _invalidated.clear();
+
+    realm.group.set_cascade_notification_handler(nullptr);
 }
 
 namespace {

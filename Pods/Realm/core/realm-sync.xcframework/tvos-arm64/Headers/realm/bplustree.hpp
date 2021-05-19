@@ -20,9 +20,7 @@
 #define REALM_BPLUSTREE_HPP
 
 #include <realm/column_type_traits.hpp>
-#include <realm/decimal128.hpp>
 #include <realm/timestamp.hpp>
-#include <realm/object_id.hpp>
 #include <realm/util/function_ref.hpp>
 
 namespace realm {
@@ -61,9 +59,6 @@ public:
     {
         m_tree = tree;
     }
-
-    bool get_context_flag() const noexcept;
-    void set_context_flag(bool) noexcept;
 
     virtual ~BPlusTreeNode();
 
@@ -117,6 +112,9 @@ public:
     void bptree_access(size_t n, AccessFunc) override;
     size_t bptree_erase(size_t n, EraseFunc) override;
     bool bptree_traverse(TraverseFunc) override;
+    void verify() const override
+    {
+    }
 };
 
 /*****************************************************************************/
@@ -143,16 +141,6 @@ public:
     bool is_attached() const
     {
         return bool(m_root);
-    }
-
-    bool get_context_flag() const noexcept
-    {
-        return m_root->get_context_flag();
-    }
-
-    void set_context_flag(bool cf) noexcept
-    {
-        m_root->set_context_flag(cf);
     }
 
     size_t size() const
@@ -255,13 +243,56 @@ protected:
 
     // Initialize the leaf cache with 'mem'
     virtual BPlusTreeLeaf* cache_leaf(MemRef mem) = 0;
-    virtual void replace_root(std::unique_ptr<BPlusTreeNode> new_root);
+    void replace_root(std::unique_ptr<BPlusTreeNode> new_root);
     std::unique_ptr<BPlusTreeNode> create_root_from_ref(ref_type ref);
 };
 
 template <>
 struct BPlusTreeBase::LeafTypeTrait<ObjKey> {
     using type = ArrayKeyNonNullable;
+};
+
+template <class T>
+struct SwapBufferType {
+    T val;
+    SwapBufferType(T v)
+        : val(v)
+    {
+    }
+    T get()
+    {
+        return val;
+    }
+};
+
+template <>
+struct SwapBufferType<StringData> {
+    std::string val;
+    bool n;
+    SwapBufferType(StringData v)
+        : val(v.data(), v.size())
+        , n(v.is_null())
+    {
+    }
+    StringData get()
+    {
+        return n ? StringData() : StringData(val);
+    }
+};
+
+template <>
+struct SwapBufferType<BinaryData> {
+    std::string val;
+    bool n;
+    SwapBufferType(BinaryData v)
+        : val(v.data(), v.size())
+        , n(v.is_null())
+    {
+    }
+    BinaryData get()
+    {
+        return n ? BinaryData() : BinaryData(val);
+    }
 };
 
 /*****************************************************************************/
@@ -319,10 +350,6 @@ public:
         {
             LeafNode* dst(static_cast<LeafNode*>(new_node));
             LeafArray::move(*dst, ndx);
-        }
-        void verify() const override
-        {
-            LeafArray::verify();
         }
     };
 
@@ -432,30 +459,12 @@ public:
 
     void swap(size_t ndx1, size_t ndx2)
     {
-        if constexpr (std::is_same_v<T, StringData> || std::is_same_v<T, BinaryData>) {
-            struct SwapBuffer {
-                std::string val;
-                bool n;
-                SwapBuffer(T v)
-                    : val(v.data(), v.size())
-                    , n(v.is_null())
-                {
-                }
-                T get()
-                {
-                    return n ? T() : T(val);
-                }
-            };
-            SwapBuffer tmp1{get(ndx1)};
-            SwapBuffer tmp2{get(ndx2)};
-            set(ndx1, tmp2.get());
-            set(ndx2, tmp1.get());
-        }
-        else {
-            T tmp = get(ndx1);
-            set(ndx1, get(ndx2));
-            set(ndx2, tmp);
-        }
+        // We need two buffers. It is illegal to call set() with get() as argument
+        // in case of StingData and BinaryData. Source data may move or get overwritten
+        SwapBufferType<T> tmp1{get(ndx1)};
+        SwapBufferType<T> tmp2{get(ndx2)};
+        set(ndx1, tmp2.get());
+        set(ndx2, tmp1.get());
     }
 
     void erase(size_t n)
@@ -566,19 +575,6 @@ protected:
         m_leaf_cache.init_from_mem(mem);
         return &m_leaf_cache;
     }
-    void replace_root(std::unique_ptr<BPlusTreeNode> new_root) override
-    {
-        // Only copy context flag over in a linklist.
-        // The flag is in use in other list types
-        if constexpr (std::is_same_v<T, ObjKey>) {
-            auto cf = m_root ? m_root->get_context_flag() : false;
-            BPlusTreeBase::replace_root(std::move(new_root));
-            m_root->set_context_flag(cf);
-        }
-        else {
-            BPlusTreeBase::replace_root(std::move(new_root));
-        }
-    }
 
     template <class R>
     friend R bptree_sum(const BPlusTree<T>& tree);
@@ -622,11 +618,6 @@ inline bool bptree_aggregate_not_null(double val)
 {
     return !null::is_null_float(val);
 }
-template <>
-inline bool bptree_aggregate_not_null(Decimal128 val)
-{
-    return !val.is_null();
-}
 template <class T>
 inline T bptree_aggregate_value(util::Optional<T> val)
 {
@@ -634,7 +625,7 @@ inline T bptree_aggregate_value(util::Optional<T> val)
 }
 
 template <class T>
-ColumnSumType<T> bptree_sum(const BPlusTree<T>& tree, size_t* return_cnt = nullptr)
+typename ColumnTypeTraits<T>::sum_type bptree_sum(const BPlusTree<T>& tree, size_t* return_cnt = nullptr)
 {
     using ResultType = typename AggregateResultType<T, act_Sum>::result_type;
     ResultType result{};
@@ -662,13 +653,10 @@ ColumnSumType<T> bptree_sum(const BPlusTree<T>& tree, size_t* return_cnt = nullp
 }
 
 template <class T>
-ColumnMinMaxType<T> bptree_maximum(const BPlusTree<T>& tree, size_t* return_ndx = nullptr)
+typename ColumnTypeTraits<T>::minmax_type bptree_maximum(const BPlusTree<T>& tree, size_t* return_ndx = nullptr)
 {
     using ResultType = typename AggregateResultType<T, act_Max>::result_type;
     ResultType max = std::numeric_limits<ResultType>::lowest();
-    if (tree.size() == 0) {
-        return max;
-    }
 
     auto func = [&max, return_ndx](BPlusTreeNode* node, size_t offset) {
         auto leaf = static_cast<typename BPlusTree<T>::LeafNode*>(node);
@@ -694,13 +682,10 @@ ColumnMinMaxType<T> bptree_maximum(const BPlusTree<T>& tree, size_t* return_ndx 
 }
 
 template <class T>
-ColumnMinMaxType<T> bptree_minimum(const BPlusTree<T>& tree, size_t* return_ndx = nullptr)
+typename ColumnTypeTraits<T>::minmax_type bptree_minimum(const BPlusTree<T>& tree, size_t* return_ndx = nullptr)
 {
     using ResultType = typename AggregateResultType<T, act_Max>::result_type;
     ResultType min = std::numeric_limits<ResultType>::max();
-    if (tree.size() == 0) {
-        return min;
-    }
 
     auto func = [&min, return_ndx](BPlusTreeNode* node, size_t offset) {
         auto leaf = static_cast<typename BPlusTree<T>::LeafNode*>(node);
@@ -726,13 +711,13 @@ ColumnMinMaxType<T> bptree_minimum(const BPlusTree<T>& tree, size_t* return_ndx 
 }
 
 template <class T>
-ColumnAverageType<T> bptree_average(const BPlusTree<T>& tree, size_t* return_cnt = nullptr)
+double bptree_average(const BPlusTree<T>& tree, size_t* return_cnt = nullptr)
 {
     size_t cnt;
     auto sum = bptree_sum(tree, &cnt);
-    ColumnAverageType<T> avg{};
+    double avg{};
     if (cnt != 0)
-        avg = ColumnAverageType<T>(sum) / cnt;
+        avg = double(sum) / cnt;
     if (return_cnt)
         *return_cnt = cnt;
     return avg;

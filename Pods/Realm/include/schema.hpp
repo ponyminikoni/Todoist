@@ -55,7 +55,7 @@ public:
 
     // Verify that this schema is internally consistent (i.e. all properties are
     // valid, links link to types that actually exist, etc.)
-    void validate(bool for_sync = false) const;
+    void validate() const;
 
     // Get the changes which must be applied to this schema to produce the passed-in schema
     std::vector<SchemaChange> compare(Schema const&, bool include_removals=false) const;
@@ -83,10 +83,6 @@ struct AddTable {
 };
 
 struct RemoveTable {
-    const ObjectSchema* object;
-};
-
-struct ChangeTableType {
     const ObjectSchema* object;
 };
 
@@ -139,7 +135,6 @@ struct ChangePrimaryKey {
 #define REALM_FOR_EACH_SCHEMA_CHANGE_TYPE(macro) \
     macro(AddTable) \
     macro(RemoveTable) \
-    macro(ChangeTableType) \
     macro(AddInitialProperties) \
     macro(AddProperty) \
     macro(RemoveProperty) \

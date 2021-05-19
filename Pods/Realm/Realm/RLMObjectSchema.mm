@@ -19,7 +19,6 @@
 #import "RLMObjectSchema_Private.hpp"
 
 #import "RLMArray.h"
-#import "RLMEmbeddedObject.h"
 #import "RLMListBase.h"
 #import "RLMObject_Private.h"
 #import "RLMProperty_Private.hpp"
@@ -105,14 +104,13 @@ using namespace realm;
         className = [RLMSwiftSupport demangleClassName:className];
     }
 
-    bool isSwift = hasSwiftName || RLMIsSwiftObjectClass(objectClass);
+    static Class s_swiftObjectClass = NSClassFromString(@"RealmSwiftObject");
+    bool isSwift = hasSwiftName || [objectClass isSubclassOfClass:s_swiftObjectClass];
 
     schema.className = className;
     schema.objectClass = objectClass;
     schema.accessorClass = objectClass;
-    schema.unmanagedClass = objectClass;
     schema.isSwiftClass = isSwift;
-    schema.isEmbedded = [(id)objectClass isEmbedded];
 
     // create array of RLMProperties, inserting properties of superclasses first
     Class cls = objectClass;
@@ -160,8 +158,8 @@ using namespace realm;
         if (!schema.primaryKeyProperty) {
             @throw RLMException(@"Primary key property '%@' does not exist on object '%@'", primaryKey, className);
         }
-        if (schema.primaryKeyProperty.type != RLMPropertyTypeInt && schema.primaryKeyProperty.type != RLMPropertyTypeString && schema.primaryKeyProperty.type != RLMPropertyTypeObjectId) {
-            @throw RLMException(@"Property '%@' cannot be made the primary key of '%@' because it is not a 'string', 'int', or 'objectId' property.",
+        if (schema.primaryKeyProperty.type != RLMPropertyTypeInt && schema.primaryKeyProperty.type != RLMPropertyTypeString) {
+            @throw RLMException(@"Property '%@' cannot be made the primary key of '%@' because it is not a 'string' or 'int' property.",
                                 primaryKey, className);
         }
     }
@@ -174,19 +172,16 @@ using namespace realm;
         }
     }
 
-    if ([objectClass shouldIncludeInDefaultSchema] && schema.isSwiftClass && schema.properties.count == 0) {
-        @throw RLMException(@"No properties are defined for '%@'. Did you remember to mark them with '@objc' in your model?", schema.className);
-    }
     return schema;
 }
 
 + (NSArray *)propertiesForClass:(Class)objectClass isSwift:(bool)isSwiftClass {
-    if (NSArray<RLMProperty *> *props = [objectClass _getProperties]) {
+    // For Swift classes we need an instance of the object when parsing properties
+    id swiftObjectInstance = isSwiftClass ? [[objectClass alloc] init] : nil;
+
+    if (NSArray<RLMProperty *> *props = [objectClass _getPropertiesWithInstance:swiftObjectInstance]) {
         return props;
     }
-
-    // For Swift subclasses of RLMObject we need an instance of the object when parsing properties
-    id swiftObjectInstance = isSwiftClass ? [[objectClass alloc] init] : nil;
 
     NSArray *ignoredProperties = [objectClass ignoredProperties];
     NSDictionary *linkingObjectsProperties = [objectClass linkingObjectsProperties];
@@ -254,7 +249,6 @@ using namespace realm;
     schema->_accessorClass = _objectClass;
     schema->_unmanagedClass = _unmanagedClass;
     schema->_isSwiftClass = _isSwiftClass;
-    schema->_isEmbedded = _isEmbedded;
 
     // call property setter to reset map and primary key
     schema.properties = [[NSArray allocWithZone:zone] initWithArray:_properties copyItems:YES];
@@ -286,8 +280,7 @@ using namespace realm;
     for (RLMProperty *property in self.computedProperties) {
         [propertiesString appendFormat:@"\t%@\n", [property.description stringByReplacingOccurrencesOfString:@"\n" withString:@"\n\t"]];
     }
-    return [NSString stringWithFormat:@"%@ %@{\n%@}",
-            self.className, _isEmbedded ? @"(embedded) " : @"", propertiesString];
+    return [NSString stringWithFormat:@"%@ {\n%@}", self.className, propertiesString];
 }
 
 - (NSString *)objectName {
@@ -298,7 +291,6 @@ using namespace realm;
     ObjectSchema objectSchema;
     objectSchema.name = self.objectName.UTF8String;
     objectSchema.primary_key = _primaryKeyProperty ? _primaryKeyProperty.columnName.UTF8String : "";
-    objectSchema.is_embedded = ObjectSchema::IsEmbedded(_isEmbedded);
     for (RLMProperty *prop in _properties) {
         Property p = [prop objectStoreCopy:schema];
         p.is_primary = (prop == _primaryKeyProperty);
@@ -313,7 +305,6 @@ using namespace realm;
 + (instancetype)objectSchemaForObjectStoreSchema:(realm::ObjectSchema const&)objectSchema {
     RLMObjectSchema *schema = [RLMObjectSchema new];
     schema.className = @(objectSchema.name.c_str());
-    schema.isEmbedded = objectSchema.is_embedded;
 
     // create array of RLMProperties
     NSMutableArray *properties = [NSMutableArray arrayWithCapacity:objectSchema.persisted_properties.size()];
@@ -353,7 +344,8 @@ using namespace realm;
     }
 
     // Check if it's a swift class using the obj-c API
-    if (!RLMIsSwiftObjectClass(_accessorClass)) {
+    static Class s_swiftObjectClass = NSClassFromString(@"RealmSwiftObject");
+    if (![_accessorClass isSubclassOfClass:s_swiftObjectClass]) {
         return _swiftGenericProperties = @[];
     }
 

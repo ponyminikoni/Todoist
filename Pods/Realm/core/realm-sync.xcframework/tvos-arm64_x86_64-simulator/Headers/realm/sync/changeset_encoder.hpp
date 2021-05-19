@@ -1,3 +1,22 @@
+/*************************************************************************
+ *
+ * REALM CONFIDENTIAL
+ * __________________
+ *
+ *  [2011] - [2017] Realm Inc
+ *  All Rights Reserved.
+ *
+ * NOTICE:  All information contained herein is, and remains
+ * the property of Realm Incorporated and its suppliers,
+ * if any.  The intellectual and technical concepts contained
+ * herein are proprietary to Realm Incorporated
+ * and its suppliers and may be covered by U.S. and Foreign Patents,
+ * patents in process, and are protected by trade secret or copyright law.
+ * Dissemination of this information or reproduction of this material
+ * is strictly forbidden unless prior written permission is obtained
+ * from Realm Incorporated.
+ *
+ **************************************************************************/
 
 #ifndef REALM_SYNC_CHANGESET_ENCODER_HPP
 #define REALM_SYNC_CHANGESET_ENCODER_HPP
@@ -9,8 +28,8 @@
 namespace realm {
 namespace sync {
 
-struct ChangesetEncoder : InstructionHandler {
-    using Buffer = util::AppendBuffer<char, util::MeteredAllocator>;
+struct ChangesetEncoder: InstructionHandler {
+    using Buffer = util::AppendBuffer<char, MeteredAllocator>;
 
     Buffer release() noexcept;
     void reset() noexcept;
@@ -31,26 +50,18 @@ struct ChangesetEncoder : InstructionHandler {
     void encode_single(const Changeset& log);
 
 protected:
-    template <class E>
-    static void encode(E& encoder, const Instruction&);
+    template<class E> static void encode(E& encoder, const Instruction&);
 
     StringData get_string(StringBufferRange) const noexcept;
 
 private:
-    template <class... Args>
+    template<class... Args>
     void append(Instruction::Type t, Args&&...);
-    template <class... Args>
-    void append_path_instr(Instruction::Type t, const Instruction::PathInstruction&, Args&&...);
     void append_string(StringBufferRange); // does not intern the string
     void append_bytes(const void*, size_t);
 
-    template <class T>
-    void append_int(T);
-    void append_value(const Instruction::PrimaryKey&);
-    void append_value(const Instruction::Payload&);
-    void append_value(const Instruction::Payload::Link&);
-    void append_value(Instruction::Payload::Type);
-    void append_value(const Instruction::Path&);
+    template<class T> void append_int(T);
+    void append_payload(const Instruction::Payload&);
     void append_value(DataType);
     void append_value(bool);
     void append_value(uint8_t);
@@ -62,8 +73,6 @@ private:
     void append_value(InternString);
     void append_value(GlobalKey);
     void append_value(Timestamp);
-    void append_value(ObjectId);
-    void append_value(Decimal128);
 
     Buffer m_buffer;
     util::metered::map<std::string, uint32_t> m_intern_strings_rev;
@@ -86,8 +95,7 @@ inline void ChangesetEncoder::operator()(const Instruction& instr)
     encode(*this, instr); // Throws
 }
 
-template <class E>
-inline void ChangesetEncoder::encode(E& encoder, const Instruction& instr)
+template<class E> inline void ChangesetEncoder::encode(E& encoder, const Instruction& instr)
 {
     instr.visit(encoder); // Throws
 }

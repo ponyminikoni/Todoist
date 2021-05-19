@@ -27,7 +27,7 @@ import Realm
 
  Property instances map to columns in the core database.
  */
-@frozen public struct Property: CustomStringConvertible {
+public struct Property: CustomStringConvertible {
     // MARK: Properties
 
     internal let rlmProperty: RLMProperty

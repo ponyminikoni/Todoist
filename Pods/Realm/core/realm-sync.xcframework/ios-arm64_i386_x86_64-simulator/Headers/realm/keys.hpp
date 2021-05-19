@@ -177,14 +177,6 @@ struct ObjKey {
         : value(val)
     {
     }
-    bool is_unresolved() const
-    {
-        return value <= -2;
-    }
-    ObjKey get_unresolved() const
-    {
-        return ObjKey(-2 - value);
-    }
     ObjKey& operator=(int64_t val) noexcept
     {
         value = val;

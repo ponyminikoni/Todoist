@@ -97,11 +97,6 @@ public:
     void check_valid() const;
     // Delete object from table. Object is invalid afterwards.
     void remove();
-    // Invalidate
-    //  - this turns the object into a tombstone if links to the object exist.
-    //  - deletes the object is no links to the object exist.
-    //  - To be used by the Sync client.
-    void invalidate();
 
     template <typename U>
     U get(ColKey col_key) const;
@@ -113,7 +108,6 @@ public:
     {
         return get<U>(get_column_key(col_name));
     }
-    bool is_unresolved(ColKey col_key) const;
     ConstObj get_linked_object(ColKey link_col_key) const;
     int cmp(const ConstObj& other, ColKey col_key) const;
 
@@ -141,7 +135,7 @@ public:
         return is_null(get_column_key(col_name));
     }
     bool has_backlinks(bool only_strong_links) const;
-    size_t get_backlink_count() const;
+    size_t get_backlink_count(bool only_strong_links = false) const;
     size_t get_backlink_count(const Table& origin, ColKey origin_col_key) const;
     ObjKey get_backlink(const Table& origin, ColKey origin_col_key, size_t backlink_ndx) const;
     TableView get_backlink_view(TableRef src_table, ColKey src_col_key);
@@ -171,37 +165,6 @@ public:
     }
 
     std::string to_string() const;
-
-    // Get the path in a minimal format without including object accessors.
-    // If you need to obtain additional information for each object in the path,
-    // you should use get_fat_path() or traverse_path() instead (see below).
-    struct PathElement;
-    struct Path {
-        TableKey top_table;
-        ObjKey top_objkey;
-        std::vector<PathElement> path_from_top;
-    };
-    Path get_path() const;
-
-    // Get the fat path to this object expressed as a vector of fat path elements.
-    // each Fat path elements include a ConstObj allowing for low cost access to the
-    // objects data.
-    // For a top-level object, the returned vector will be empty.
-    // For an embedded object, the vector has the top object as first element,
-    // and the embedded object itself is not included in the path.
-    struct FatPathElement;
-    using FatPath = std::vector<FatPathElement>;
-    FatPath get_fat_path() const;
-
-    // For an embedded object, traverse the path leading to this object.
-    // The PathSizer is called first to set the size of the path
-    // Then there is one call for each object on that path, starting with the top level object
-    // The embedded object itself is not considered part of the path.
-    // Note: You should never provide the path_index for calls to traverse_path.
-    using Visitor = std::function<void(const ConstObj&, ColKey, size_t)>;
-    using PathSizer = std::function<void(size_t)>;
-    void traverse_path(Visitor v, PathSizer ps, size_t path_index = 0) const;
-
 
 protected:
     friend class Obj;
@@ -243,7 +206,6 @@ protected:
     int cmp(const ConstObj& other, ColKey::Idx col_ndx) const;
     ObjKey get_backlink(ColKey backlink_col, size_t backlink_ndx) const;
     std::vector<ObjKey> get_all_backlinks(ColKey backlink_col) const;
-    ObjKey get_unfiltered_link(ColKey col_key) const;
 };
 
 std::ostream& operator<<(std::ostream&, const ConstObj& obj);
@@ -263,16 +225,7 @@ public:
 
     template <typename U>
     Obj& set(ColKey col_key, U value, bool is_default = false);
-    // Create a new object and link it. If an embedded object
-    // is already set, it will be removed. If a non-embedded
-    // object is already set, we throw LogicError (to prevent
-    // dangling objects, since they do not delete automatically
-    // if they are not embedded...)
-    Obj create_and_set_linked_object(ColKey col_key, bool is_default = false);
-    // Clear all fields of a linked object returning it to its
-    // default state. If the object does not exist, create a
-    // new object and link it. (To Be Implemented)
-    Obj clear_linked_object(ColKey col_key);
+
     Obj& set(ColKey col_key, Mixed value);
 
     template <typename U>
@@ -322,7 +275,6 @@ public:
     LnkLst get_linklist(StringData col_name) const;
 
     LstBasePtr get_listbase_ptr(ColKey col_key) const;
-    void assign_pk_and_backlinks(const ConstObj& other);
 
 private:
     friend class ArrayBacklink;
@@ -345,6 +297,7 @@ private:
     Obj& _set(size_t col_ndx, Head v, Tail... tail);
     ColKey spec_ndx2colkey(size_t col_ndx);
     bool ensure_writeable();
+    void sync(Array& arr);
     void bump_content_version();
     void bump_both_versions();
     template <class T>
@@ -362,17 +315,6 @@ private:
     bool remove_backlink(ColKey col_key, ObjKey old_key, CascadeState& state) const;
     template <class T>
     inline void set_spec(T&, ColKey);
-};
-
-struct ConstObj::FatPathElement {
-    ConstObj obj;   // Object which embeds...
-    ColKey col_key; // Column holding link or link list which embeds...
-    size_t index;   // index into link list (or 0)
-};
-
-struct ConstObj::PathElement {
-    ColKey col_key; // Column holding link or link list which embeds...
-    size_t index;   // index into link list (or 0)
 };
 
 inline Obj Obj::get_linked_object(ColKey link_col_key)
@@ -397,7 +339,7 @@ template <>
 inline Obj& Obj::set(ColKey col_key, uint_fast64_t value, bool is_default)
 {
     int_fast64_t value_2 = 0;
-    if (REALM_UNLIKELY(util::int_cast_with_overflow_detect(value, value_2))) {
+    if (REALM_UNLIKELY(int_cast_with_overflow_detect(value, value_2))) {
         REALM_TERMINATE("Unsigned integer too big.");
     }
     return set(col_key, value_2, is_default);
@@ -428,31 +370,25 @@ inline Obj& Obj::set(ColKey col_key, realm::null, bool is_default)
 }
 
 template <>
-inline Obj& Obj::set(ColKey col_key, util::Optional<bool> value, bool is_default)
+inline Obj& Obj::set(ColKey col_key, Optional<bool> value, bool is_default)
 {
     return value ? set(col_key, *value, is_default) : set_null(col_key, is_default);
 }
 
 template <>
-inline Obj& Obj::set(ColKey col_key, util::Optional<int64_t> value, bool is_default)
+inline Obj& Obj::set(ColKey col_key, Optional<int64_t> value, bool is_default)
 {
     return value ? set(col_key, *value, is_default) : set_null(col_key, is_default);
 }
 
 template <>
-inline Obj& Obj::set(ColKey col_key, util::Optional<float> value, bool is_default)
+inline Obj& Obj::set(ColKey col_key, Optional<float> value, bool is_default)
 {
     return value ? set(col_key, *value, is_default) : set_null(col_key, is_default);
 }
 
 template <>
-inline Obj& Obj::set(ColKey col_key, util::Optional<double> value, bool is_default)
-{
-    return value ? set(col_key, *value, is_default) : set_null(col_key, is_default);
-}
-
-template <>
-inline Obj& Obj::set(ColKey col_key, util::Optional<ObjectId> value, bool is_default)
+inline Obj& Obj::set(ColKey col_key, Optional<double> value, bool is_default)
 {
     return value ? set(col_key, *value, is_default) : set_null(col_key, is_default);
 }

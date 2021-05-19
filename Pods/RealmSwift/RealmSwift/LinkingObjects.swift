@@ -33,7 +33,7 @@ import Realm
  `LinkingObjects` can only be used as a property on `Object` models. Properties of this type must be declared as `let`
  and cannot be `dynamic`.
  */
-@frozen public struct LinkingObjects<Element: ObjectBase> where Element: RealmCollectionValue {
+public struct LinkingObjects<Element: Object> {
     /// The type of the objects represented by the linking objects.
     public typealias ElementType = Element
 

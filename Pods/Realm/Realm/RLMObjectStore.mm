@@ -42,6 +42,10 @@
 
 using namespace realm;
 
+static_assert(RLMUpdatePolicyError == static_cast<int>(CreatePolicy::ForceCreate), "");
+static_assert(RLMUpdatePolicyUpdateAll == static_cast<int>(CreatePolicy::UpdateAll), "");
+static_assert(RLMUpdatePolicyUpdateChanged == static_cast<int>(CreatePolicy::UpdateModified), "");
+
 void RLMRealmCreateAccessors(RLMSchema *schema) {
     const size_t bufferSize = sizeof("RLM:Managed  ") // includes null terminator
                             + std::numeric_limits<unsigned long long>::digits10
@@ -116,48 +120,76 @@ void RLMVerifyHasPrimaryKey(Class cls) {
     }
 }
 
-static CreatePolicy updatePolicyToCreatePolicy(RLMUpdatePolicy policy) {
-    CreatePolicy createPolicy = {.create = true, .copy = false, .diff = false, .update = false};
-    switch (policy) {
-        case RLMUpdatePolicyError:
-            break;
-        case RLMUpdatePolicyUpdateChanged:
-            createPolicy.diff = true;
-            [[clang::fallthrough]];
-        case RLMUpdatePolicyUpdateAll:
-            createPolicy.update = true;
-            break;
-    }
-    return createPolicy;
-}
-
 void RLMAddObjectToRealm(__unsafe_unretained RLMObjectBase *const object,
                          __unsafe_unretained RLMRealm *const realm,
                          RLMUpdatePolicy updatePolicy) {
     RLMVerifyInWriteTransaction(realm);
 
-    CreatePolicy createPolicy = updatePolicyToCreatePolicy(updatePolicy);
-    createPolicy.copy = false;
+    // verify that object is unmanaged
+    if (object.invalidated) {
+        @throw RLMException(@"Adding a deleted or invalidated object to a Realm is not permitted");
+    }
+    if (object->_realm) {
+        if (object->_realm == realm) {
+            // Adding an object to the Realm it's already manged by is a no-op
+            return;
+        }
+        // for differing realms users must explicitly create the object in the second realm
+        @throw RLMException(@"Object is already managed by another Realm. Use create instead to copy it into this Realm.");
+    }
+    if (object->_observationInfo && object->_observationInfo->hasObservers()) {
+        @throw RLMException(@"Cannot add an object with observers to a Realm");
+    }
+
     auto& info = realm->_info[object->_objectSchema.className];
-    RLMAccessorContext c{info};
-    c.createObject(object, createPolicy);
+    RLMAccessorContext c{info, true};
+    object->_info = &info;
+    object->_realm = realm;
+    object->_objectSchema = info.rlmObjectSchema;
+    try {
+        realm::Object::create(c, realm->_realm, *info.objectSchema, (id)object,
+                              static_cast<CreatePolicy>(updatePolicy),
+                              {}, &object->_row);
+    }
+    catch (std::exception const& e) {
+        @throw RLMException(e);
+    }
+    object_setClass(object, info.rlmObjectSchema.accessorClass);
+    RLMInitializeSwiftAccessorGenerics(object);
 }
 
 RLMObjectBase *RLMCreateObjectInRealmWithValue(RLMRealm *realm, NSString *className,
                                                id value, RLMUpdatePolicy updatePolicy) {
     RLMVerifyInWriteTransaction(realm);
 
-    CreatePolicy createPolicy = updatePolicyToCreatePolicy(updatePolicy);
-    createPolicy.copy = true;
+    if (updatePolicy != RLMUpdatePolicyError && RLMIsObjectSubclass([value class])) {
+        RLMObjectBase *obj = value;
+        if (obj->_realm == realm && [obj->_objectSchema.className isEqualToString:className]) {
+            // This is a no-op if value is an RLMObject of the same type already backed by the target realm.
+            return value;
+        }
+    }
+
+    if (!value || value == NSNull.null) {
+        @throw RLMException(@"Must provide a non-nil value.");
+    }
 
     auto& info = realm->_info[className];
-    RLMAccessorContext c{info};
-    RLMObjectBase *object = RLMCreateManagedAccessor(info.rlmObjectSchema.accessorClass, &info);
-    auto [obj, reuseExisting] = c.createObject(value, createPolicy, true);
-    if (reuseExisting) {
-        return value;
+    if ([value isKindOfClass:[NSArray class]] && [value count] > info.objectSchema->persisted_properties.size()) {
+        @throw RLMException(@"Invalid array input: more values (%llu) than properties (%llu).",
+                            (unsigned long long)[value count],
+                            (unsigned long long)info.objectSchema->persisted_properties.size());
     }
-    object->_row = std::move(obj);
+
+    RLMAccessorContext c{info, false};
+    RLMObjectBase *object = RLMCreateManagedAccessor(info.rlmObjectSchema.accessorClass, &info);
+    try {
+        object->_row = realm::Object::create(c, realm->_realm, *info.objectSchema, (id)value,
+                                             static_cast<CreatePolicy>(updatePolicy)).obj();
+    }
+    catch (std::exception const& e) {
+        @throw RLMException(e);
+    }
     RLMInitializeSwiftAccessorGenerics(object);
     return object;
 }
@@ -170,10 +202,14 @@ void RLMDeleteObjectFromRealm(__unsafe_unretained RLMObjectBase *const object,
 
     RLMVerifyInWriteTransaction(object->_realm);
 
+    // move last row to row we are deleting
     if (object->_row.is_valid()) {
-        RLMObservationTracker tracker(realm, true);
-        object->_row.remove();
+        RLMTrackDeletions(realm, ^{
+            object->_row.remove();
+        });
     }
+
+    // set realm to nil
     object->_realm = nil;
 }
 

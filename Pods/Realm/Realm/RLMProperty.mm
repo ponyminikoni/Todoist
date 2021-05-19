@@ -29,16 +29,14 @@
 
 #import "property.hpp"
 
-static_assert((int)RLMPropertyTypeInt        == (int)realm::PropertyType::Int);
-static_assert((int)RLMPropertyTypeBool       == (int)realm::PropertyType::Bool);
-static_assert((int)RLMPropertyTypeFloat      == (int)realm::PropertyType::Float);
-static_assert((int)RLMPropertyTypeDouble     == (int)realm::PropertyType::Double);
-static_assert((int)RLMPropertyTypeString     == (int)realm::PropertyType::String);
-static_assert((int)RLMPropertyTypeData       == (int)realm::PropertyType::Data);
-static_assert((int)RLMPropertyTypeDate       == (int)realm::PropertyType::Date);
-static_assert((int)RLMPropertyTypeObject     == (int)realm::PropertyType::Object);
-static_assert((int)RLMPropertyTypeObjectId   == (int)realm::PropertyType::ObjectId);
-static_assert((int)RLMPropertyTypeDecimal128 == (int)realm::PropertyType::Decimal);
+static_assert((int)RLMPropertyTypeInt    == (int)realm::PropertyType::Int, "");
+static_assert((int)RLMPropertyTypeBool   == (int)realm::PropertyType::Bool, "");
+static_assert((int)RLMPropertyTypeFloat  == (int)realm::PropertyType::Float, "");
+static_assert((int)RLMPropertyTypeDouble == (int)realm::PropertyType::Double, "");
+static_assert((int)RLMPropertyTypeString == (int)realm::PropertyType::String, "");
+static_assert((int)RLMPropertyTypeData   == (int)realm::PropertyType::Data, "");
+static_assert((int)RLMPropertyTypeDate   == (int)realm::PropertyType::Date, "");
+static_assert((int)RLMPropertyTypeObject == (int)realm::PropertyType::Object, "");
 
 BOOL RLMPropertyTypeIsComputed(RLMPropertyType propertyType) {
     return propertyType == RLMPropertyTypeLinkingObjects;
@@ -170,12 +168,6 @@ static realm::util::Optional<RLMPropertyType> typeFromProtocolString(const char 
     if (strcmp(type, "Date>\"") == 0) {
         return RLMPropertyTypeDate;
     }
-    if (strcmp(type, "Decimal128>\"") == 0) {
-        return RLMPropertyTypeDecimal128;
-    }
-    if (strcmp(type, "ObjectId>\"") == 0) {
-        return RLMPropertyTypeObjectId;
-    }
     return realm::none;
 }
 
@@ -223,12 +215,6 @@ static realm::util::Optional<RLMPropertyType> typeFromProtocolString(const char 
     }
     else if (strcmp(code, "@\"NSData\"") == 0) {
         _type = RLMPropertyTypeData;
-    }
-    else if (strcmp(code, "@\"RLMDecimal128\"") == 0) {
-        _type = RLMPropertyTypeDecimal128;
-    }
-    else if (strcmp(code, "@\"RLMObjectId\"") == 0) {
-        _type = RLMPropertyTypeObjectId;
     }
     else if (strncmp(code, arrayPrefix, arrayPrefixLen) == 0) {
         _array = true;
@@ -305,7 +291,7 @@ static realm::util::Optional<RLMPropertyType> typeFromProtocolString(const char 
 
         if (!cls) {
             @throw RLMException(@"Property '%@' is declared as '%@', which is not a supported RLMObject property type. "
-                                @"All properties must be primitives, NSString, NSDate, NSData, NSNumber, RLMArray, RLMLinkingObjects, RLMDecimal128, RLMObjectId, or subclasses of RLMObject. "
+                                @"All properties must be primitives, NSString, NSDate, NSData, NSNumber, RLMArray, RLMLinkingObjects, or subclasses of RLMObject. "
                                 @"See https://realm.io/docs/objc/latest/api/Classes/RLMObject.html for more information.", _name, className);
         }
 
@@ -578,24 +564,18 @@ static realm::util::Optional<RLMPropertyType> typeFromProtocolString(const char 
 }
 
 - (NSString *)description {
-    NSString *objectClassName = @"";
-    if (self.type == RLMPropertyTypeObject || self.type == RLMPropertyTypeLinkingObjects) {
-        objectClassName = [NSString stringWithFormat:
-                           @"\tobjectClassName = %@;\n"
-                           @"\tlinkOriginPropertyName = %@;\n",
-                           self.objectClassName, self.linkOriginPropertyName];
-    }
     return [NSString stringWithFormat:
             @"%@ {\n"
              "\ttype = %@;\n"
-             "%@"
+             "\tobjectClassName = %@;\n"
+             "\tlinkOriginPropertyName = %@;\n"
              "\tindexed = %@;\n"
              "\tisPrimary = %@;\n"
              "\tarray = %@;\n"
              "\toptional = %@;\n"
              "}",
-            self.name, RLMTypeToString(self.type),
-            objectClassName,
+            self.name, RLMTypeToString(self.type), self.objectClassName,
+            self.linkOriginPropertyName,
             self.indexed ? @"YES" : @"NO",
             self.isPrimary ? @"YES" : @"NO",
             self.array ? @"YES" : @"NO",

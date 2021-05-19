@@ -29,8 +29,6 @@
 #include <realm/data_type.hpp>
 #include <realm/string_data.hpp>
 #include <realm/timestamp.hpp>
-#include <realm/decimal128.hpp>
-#include <realm/object_id.hpp>
 #include <realm/util/assert.hpp>
 #include <realm/utilities.hpp>
 
@@ -127,9 +125,6 @@ public:
     Mixed(StringData) noexcept;
     Mixed(BinaryData) noexcept;
     Mixed(Timestamp) noexcept;
-    Mixed(Decimal128);
-    Mixed(ObjectId) noexcept;
-    Mixed(util::Optional<ObjectId>) noexcept;
     Mixed(ObjKey) noexcept;
 
     // These are shortcuts for Mixed(StringData(c_str)), and are
@@ -179,29 +174,22 @@ public:
     {
         return compare(other) != 0;
     }
-    bool operator<(const Mixed& other) const
-    {
-        return compare(other) < 0;
-    }
-    bool operator>(const Mixed& other) const
-    {
-        return compare(other) > 0;
-    }
 
 private:
     friend std::ostream& operator<<(std::ostream& out, const Mixed& m);
 
     uint32_t m_type;
     union {
+        int32_t short_val;
+        uint32_t ushort_val;
+    };
+
+    union {
         int64_t int_val;
         bool bool_val;
         float float_val;
         double double_val;
-        StringData string_val;
-        BinaryData binary_val;
-        Timestamp date_val;
-        ObjectId id_val;
-        Decimal128 decimal_val;
+        const char* str_val;
     };
 };
 
@@ -275,22 +263,12 @@ inline Mixed::Mixed(util::Optional<double> v) noexcept
     }
 }
 
-inline Mixed::Mixed(util::Optional<ObjectId> v) noexcept
-{
-    if (v) {
-        m_type = type_ObjectId + 1;
-        id_val = *v;
-    }
-    else {
-        m_type = 0;
-    }
-}
-
 inline Mixed::Mixed(StringData v) noexcept
 {
     if (!v.is_null()) {
         m_type = type_String + 1;
-        string_val = v;
+        str_val = v.data();
+        ushort_val = uint32_t(v.size());
     }
     else {
         m_type = 0;
@@ -301,7 +279,8 @@ inline Mixed::Mixed(BinaryData v) noexcept
 {
     if (!v.is_null()) {
         m_type = type_Binary + 1;
-        binary_val = v;
+        str_val = v.data();
+        ushort_val = uint32_t(v.size());
     }
     else {
         m_type = 0;
@@ -312,28 +291,12 @@ inline Mixed::Mixed(Timestamp v) noexcept
 {
     if (!v.is_null()) {
         m_type = type_Timestamp + 1;
-        date_val = v;
+        int_val = v.get_seconds();
+        short_val = v.get_nanoseconds();
     }
     else {
         m_type = 0;
     }
-}
-
-inline Mixed::Mixed(Decimal128 v)
-{
-    if (!v.is_null()) {
-        m_type = type_Decimal + 1;
-        decimal_val = v;
-    }
-    else {
-        m_type = 0;
-    }
-}
-
-inline Mixed::Mixed(ObjectId v) noexcept
-{
-    m_type = type_ObjectId + 1;
-    id_val = v;
 }
 
 inline Mixed::Mixed(ObjKey v) noexcept
@@ -399,7 +362,7 @@ template <>
 inline StringData Mixed::get<StringData>() const noexcept
 {
     REALM_ASSERT(get_type() == type_String);
-    return string_val;
+    return StringData(str_val, ushort_val);
 }
 
 inline StringData Mixed::get_string() const
@@ -411,7 +374,7 @@ template <>
 inline BinaryData Mixed::get<BinaryData>() const noexcept
 {
     REALM_ASSERT(get_type() == type_Binary);
-    return binary_val;
+    return BinaryData(str_val, ushort_val);
 }
 
 inline BinaryData Mixed::get_binary() const
@@ -423,26 +386,12 @@ template <>
 inline Timestamp Mixed::get<Timestamp>() const noexcept
 {
     REALM_ASSERT(get_type() == type_Timestamp);
-    return date_val;
+    return Timestamp(int_val, short_val);
 }
 
 inline Timestamp Mixed::get_timestamp() const
 {
     return get<Timestamp>();
-}
-
-template <>
-inline Decimal128 Mixed::get<Decimal128>() const noexcept
-{
-    REALM_ASSERT(get_type() == type_Decimal);
-    return decimal_val;
-}
-
-template <>
-inline ObjectId Mixed::get<ObjectId>() const noexcept
-{
-    REALM_ASSERT(get_type() == type_ObjectId);
-    return id_val;
 }
 
 template <>
